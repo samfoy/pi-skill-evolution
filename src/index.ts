@@ -43,6 +43,16 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     cachedCtx = ctx;
     try {
+      // Check for session-search dependency
+      const sessionIndexPath = join(process.env.HOME || "~", ".pi", "session-search", "index", "session-index.json");
+      if (!existsSync(sessionIndexPath)) {
+        ctx.ui.notify(
+          "skill-evolution: session-search index not found. Install with: pi install npm:pi-session-search",
+          "warning",
+        );
+        return;
+      }
+
       state = loadState();
       const proposalCount = state.proposals.filter(p => p.status === "proposed").length;
       const criticals = Object.values(state.health).flatMap(
