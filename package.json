@@ -1,0 +1,45 @@
+{
+  "name": "pi-skill-evolution",
+  "version": "0.1.0",
+  "description": "Meta-skill and self-improvement loop for pi — mines session history for repeated workflows, proposes new skills, and tracks skill health.",
+  "keywords": [
+    "pi-package",
+    "extension",
+    "meta-skill",
+    "self-improvement",
+    "skill-forge",
+    "skill-dojo"
+  ],
+  "files": [
+    "src",
+    "skills",
+    "README.md",
+    "LICENSE"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/samfoy/pi-skill-evolution"
+  },
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ],
+    "skills": [
+      "./skills"
+    ]
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*",
+    "@sinclair/typebox": "*"
+  },
+  "devDependencies": {
+    "@sinclair/typebox": "^0.34.48",
+    "@types/node": "^22.15.21",
+    "tsx": "^4.19.4",
+    "typescript": "^5.8.3"
+  }
+}
