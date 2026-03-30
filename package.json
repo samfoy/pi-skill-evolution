@@ -1,6 +1,6 @@
 {
   "name": "pi-skill-evolution",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Meta-skill and self-improvement loop for pi — mines session history for repeated workflows, proposes new skills, and tracks skill health.",
   "keywords": [
     "pi-package",

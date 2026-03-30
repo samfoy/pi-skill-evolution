@@ -23,7 +23,9 @@ import { Type } from "@sinclair/typebox";
 import { loadState, saveState, mergePatterns, mergeHealth } from "./store.js";
 import { minePatterns, loadSessionList } from "./miner.js";
 import { extractInvocations, computeHealth } from "./tracker.js";
+import { appendFeedback, readFeedback, countFeedback } from "./feedback.js";
 import type { EvolutionState, SkillProposal } from "./types.js";
+import type { FeedbackEntry } from "./feedback.js";
 import { existsSync, readdirSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 
@@ -37,11 +39,20 @@ export default function (pi: ExtensionAPI) {
   let state: EvolutionState | null = null;
   let cachedCtx: any = null;
   let sessionSkillReads: string[] = []; // skills loaded this session (for tracking)
+  let sessionId: string | undefined;
+
+  // Feedback tracking state
+  let currentSkill: string | null = null;
+  let pendingFeedback: FeedbackEntry[] = [];
+  let lastToolName = "";
+  let lastToolFailed = false;
+  let retryCount = 0;
 
   // ─── Lifecycle ───────────────────────────────────────────────────
 
   pi.on("session_start", async (_event, ctx) => {
     cachedCtx = ctx;
+    sessionId = ctx.sessionManager?.getSessionFile()?.match(/([a-f0-9-]{36})/)?.[1];
     try {
       // Check for session-search dependency
       const sessionIndexPath = join(process.env.HOME || "~", ".pi", "session-search", "index", "session-index.json");
@@ -124,19 +135,128 @@ export default function (pi: ExtensionAPI) {
   });
 
   // Track which skills are loaded during the session (via tool_call interception)
+  // Also track tool errors for feedback logging
   pi.on("tool_call", async (event, _ctx) => {
     if (event.toolName === "read") {
       const path = (event.input as Record<string, any>)?.path;
       if (typeof path === "string" && path.includes("SKILL.md")) {
         const skill = path.split("skills/").pop()?.split("/")[0];
-        if (skill) sessionSkillReads.push(skill);
+        if (skill) {
+          // Flush feedback for previous skill if it had issues
+          if (currentSkill && retryCount >= 2) {
+            pendingFeedback.push({
+              skill: currentSkill,
+              timestamp: new Date().toISOString(),
+              symptom: `${retryCount} retries during skill execution`,
+              detail: `Last failing tool: ${lastToolName}`,
+              category: "excessive_retries",
+              sessionId,
+            });
+          }
+          currentSkill = skill;
+          sessionSkillReads.push(skill);
+          retryCount = 0;
+          lastToolFailed = false;
+          lastToolName = "";
+        }
       }
+    }
+
+    if (currentSkill) {
+      // Detect retry: same tool called again right after a failure
+      if (lastToolFailed && event.toolName === lastToolName) {
+        retryCount++;
+      }
+      lastToolName = event.toolName;
+    }
+  });
+
+  // Track tool results for error detection
+  pi.on("tool_execution_end", async (event, _ctx) => {
+    if (!currentSkill) return;
+    if (event.isError) {
+      lastToolFailed = true;
+      const errorText = event.result?.content
+        ? (Array.isArray(event.result.content)
+            ? event.result.content
+                .filter((b: any) => b.type === "text")
+                .map((b: any) => b.text)
+                .join(" ")
+                .slice(0, 200)
+            : "")
+        : "";
+
+      // Log individual tool errors that look significant
+      if (errorText && (
+        errorText.includes("ExpiredToken") ||
+        errorText.includes("not authorized") ||
+        errorText.includes("Unknown parameter") ||
+        errorText.includes("required")
+      )) {
+        pendingFeedback.push({
+          skill: currentSkill,
+          timestamp: new Date().toISOString(),
+          symptom: `Tool ${event.toolName} failed`,
+          detail: errorText,
+          category: "tool_error",
+          sessionId,
+        });
+      }
+    } else {
+      lastToolFailed = false;
+    }
+  });
+
+  // Detect user corrections after skill usage
+  pi.on("input", async (event, _ctx) => {
+    if (!currentSkill) return;
+    const text = typeof event.text === "string" ? event.text : "";
+    const correctionPatterns = [
+      /\bno[,.]?\s+(that's|thats|that is)\s+(not|wrong)/i,
+      /\bactually[,.]?\s/i,
+      /\bdon'?t\s+do\s+that\b/i,
+      /\bnot\s+what\s+I\s+(asked|wanted|meant)/i,
+      /\bthat'?s\s+not\s+right/i,
+      /\bwrong\b/i,
+      /\bundo\b/i,
+      /\brevert\b/i,
+    ];
+    if (correctionPatterns.some(p => p.test(text))) {
+      pendingFeedback.push({
+        skill: currentSkill,
+        timestamp: new Date().toISOString(),
+        symptom: "User corrected the agent",
+        detail: text.slice(0, 200),
+        category: "user_correction",
+        sessionId,
+      });
     }
   });
 
   // Auto-analyze on shutdown — like pi-memory's consolidation
   pi.on("session_shutdown", async () => {
     if (!state) return;
+
+    // Flush any remaining feedback for the current skill
+    if (currentSkill && retryCount >= 2) {
+      pendingFeedback.push({
+        skill: currentSkill,
+        timestamp: new Date().toISOString(),
+        symptom: `${retryCount} retries during skill execution`,
+        detail: `Last failing tool: ${lastToolName}`,
+        category: "excessive_retries",
+        sessionId,
+      });
+    }
+
+    // Write all pending feedback entries
+    let feedbackWritten = 0;
+    for (const entry of pendingFeedback) {
+      if (appendFeedback(entry)) feedbackWritten++;
+    }
+    if (feedbackWritten > 0 && cachedCtx) {
+      cachedCtx.ui.setStatus("skill-evolution", `Logged ${feedbackWritten} feedback entries`);
+    }
 
     if (cachedCtx) {
       cachedCtx.ui.setStatus("skill-evolution", "Analyzing session patterns...");
@@ -512,6 +632,18 @@ ${proposal.pattern.sessionIds.slice(0, 5).map(id => `- \`${id}\``).join("\n")}
         lines.push(`\nRelated workflow patterns:`);
         for (const p of related.slice(0, 5)) {
           lines.push(`  ${p.sessionCount}x ${p.label}`);
+        }
+      }
+
+      // Show recent feedback
+      const feedback = readFeedback(params.skill, 10);
+      if (feedback) {
+        lines.push(`\nRecent feedback (from FEEDBACK.md):`);
+        lines.push(feedback);
+      } else {
+        const fbCount = countFeedback(params.skill);
+        if (fbCount === 0) {
+          lines.push(`\nNo feedback entries yet.`);
         }
       }
 
