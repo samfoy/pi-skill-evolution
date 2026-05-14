@@ -18,7 +18,7 @@
  * - agent_end: track skill invocations from this turn
  * - session_shutdown: persist state, run incremental analysis automatically
  */
-import type { ExtensionAPI, AgentToolResult } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, AgentToolResult } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { loadState, saveState, mergePatterns, mergeHealth } from "./store.js";
 import { minePatterns, loadSessionList } from "./miner.js";
