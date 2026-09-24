@@ -1,5 +1,8 @@
 # pi-skill-evolution
 
+> [!WARNING]
+> **Deprecated — no longer maintained.** This package is archived and will not receive updates or compatibility fixes for current pi releases.
+
 Meta-skill and self-improvement loop for [pi](https://github.com/badlogic/pi-mono). Mines your session history for repeated workflows, proposes new skills, and tracks skill health — automatically.
 
 ## What it does
